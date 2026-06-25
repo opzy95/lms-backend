@@ -59,52 +59,81 @@ class TutorController extends Controller
     }
 
     // PUT /api/tutor/courses/{id} - update course
-    public function update(Request $request, $id)
-    {
-        $course = Course::where('id', $id)
-                        ->where('tutor_id', $request->user()->id)
-                        ->first();
+   public function update(Request $request, $id)
+{
+    $course = Course::where('id', $id)
+        ->where('tutor_id', $request->user()->id)
+        ->first();
 
-        if (!$course) {
-            return response()->json(['message' => 'Course not found'], 404);
-        }
-
-        $course->update($request->only(['title', 'description', 'type', 'price']));
-        
-        return response()->json(['message' => 'Course updated', 'course' => $course]);
+    if (!$course) {
+        return response()->json(['message' => 'Course not found'], 404);
     }
 
-    public function dashboard()
-    {
-        $courses = Course::where('tutor_id', auth()->id())
-            ->withCount(['lessons'])
-            ->get();
+    $validator = Validator::make($request->all(), [
+        'title' => 'sometimes|string|max:255',
+        'description' => 'sometimes|string',
+        'type' => 'sometimes|in:free,paid',
+        'price' => 'nullable|numeric|min:0',
+    ]);
 
-        $data = $courses->map(function($course) {
-            $totalEnrolled = Enrollment::where('course_id', $course->id)->count();
-
-            $activeStudents = QuizAttempt::whereHas('quiz.lesson', fn($q) => 
-                $q->where('course_id', $course->id)
-            )->distinct('student_id')->count('student_id');
-
-            $pendingEssays = QuizAnswer::whereNull('graded_at')
-                ->whereHas('question', fn($q) => $q->where('type', 'essay'))
-                ->whereHas('attempt.quiz.lesson', fn($q) => 
-                    $q->where('course_id', $course->id)
-                )->count();
-
-            return [
-                'course_id' => $course->id,
-                'title' => $course->title,
-                'lessons_count' => $course->lessons_count,
-                'total_enrolled' => $totalEnrolled,
-                'active_students' => $activeStudents,
-                'pending_essays' => $pendingEssays
-            ];
-        });
-
-        return response()->json($data);
+    if ($validator->fails()) {
+        return response()->json(['errors' => $validator->errors()], 422);
     }
+
+    $data = $request->only(['title', 'description', 'type', 'price']);
+    if (($data['type'] ?? $course->type) === 'free') {
+        $data['price'] = 0;
+    }
+
+    $course->update($data);
+
+    return response()->json(['message' => 'Course updated', 'course' => $course]);
+}
+
+  public function dashboard()
+{
+    $tutorId = auth()->id();
+
+    $courses = Course::where('tutor_id', $tutorId)
+        ->withCount('lessons')
+        ->get();
+
+    $courseIds = $courses->pluck('id');
+
+    // One query: enrollment counts per course
+    $enrollCounts = Enrollment::whereIn('course_id', $courseIds)
+        ->selectRaw('course_id, count(*) as total')
+        ->groupBy('course_id')
+        ->pluck('total', 'course_id');
+
+    // One query: active (distinct) students per course
+    $activeCounts = QuizAttempt::join('quizzes', 'quizzes.id', '=', 'quiz_attempts.quiz_id')
+        ->join('lessons', 'lessons.id', '=', 'quizzes.lesson_id')
+        ->whereIn('lessons.course_id', $courseIds)
+        ->selectRaw('lessons.course_id, count(distinct quiz_attempts.student_id) as total')
+        ->groupBy('lessons.course_id')
+        ->pluck('total', 'course_id');
+
+    // One query: pending essays per course
+    $pendingCounts = QuizAnswer::whereNull('graded_at')
+        ->whereHas('question', fn($q) => $q->where('type', 'essay'))
+        ->whereHas('attempt.quiz.lesson', fn($q) => $q->whereIn('course_id', $courseIds))
+        ->with('attempt.quiz.lesson:id,course_id')
+        ->get()
+        ->groupBy('attempt.quiz.lesson.course_id')
+        ->map->count();
+
+    return response()->json($courses->map(function ($course) use ($enrollCounts, $activeCounts, $pendingCounts) {
+        return [
+            'course_id' => $course->id,
+            'title' => $course->title,
+            'lessons_count' => $course->lessons_count,
+            'total_enrolled' => $enrollCounts[$course->id] ?? 0,
+            'active_students' => $activeCounts[$course->id] ?? 0,
+            'pending_essays' => $pendingCounts[$course->id] ?? 0,
+        ];
+    }));
+}
 
      public function courseStudents($course_id)
     {
@@ -142,7 +171,8 @@ class TutorController extends Controller
       public function lessonStudents($lesson_id)
     {
         $lesson = Lesson::where('id', $lesson_id)
-            ->where('tutor_id', auth()->id())->first();
+    ->whereHas('course', fn($q) => $q->where('tutor_id', auth()->id()))
+    ->first();
         if(!$lesson) return response()->json(['message' => 'Unauthorized'], 403);
 
         $quiz = Quiz::where('lesson_id', $lesson_id)->first();
@@ -171,4 +201,5 @@ class TutorController extends Controller
             'students' => $students
         ]);
     }
+    
 }

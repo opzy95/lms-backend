@@ -137,7 +137,11 @@ class LessonController extends Controller
     public function download(Lesson $lesson)
     {
         // Verify student is enrolled in the course
-        if (!auth()->user()->enrollments()->where('course_id', $lesson->course_id)->exists()) {
+        $userId = auth()->id();
+        $isOwner = $lesson->course->tutor_id === $userId;
+        $isEnrolled = auth()->user()->enrollments()->where('course_id', $lesson->course_id)->exists();
+
+        if (!$isOwner && !$isEnrolled) {
             return response()->json(['message' => 'Not enrolled in this course'], 403);
         }
 

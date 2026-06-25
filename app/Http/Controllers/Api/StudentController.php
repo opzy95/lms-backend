@@ -36,23 +36,36 @@ class StudentController extends Controller
             return response()->json(['message' => 'No courses enrolled yet', 'courses' => []]);
         }
 
-        $data = $enrollments->map(function ($enroll) use ($user_id) {
-            $course = $enroll->course;
-            $totalQuizzes = Lesson::where('course_id', $course->id)->whereHas('quiz')->count();
+        $courseIds = $enrollments->pluck('course.id');
 
-            $gradedQuizzes = QuizAttempt::where('student_id', $user_id)
-                ->where('status', 'graded')
-                ->whereHas('quiz.lesson', fn($q) => $q->where('course_id', $course->id))
-                ->count();
+        $totalQuizzes = Lesson::whereIn('course_id', $courseIds)
+            ->whereHas('quiz')
+            ->selectRaw('course_id, count(*) as total')
+            ->groupBy('course_id')
+            ->pluck('total', 'course_id');
+
+        $gradedQuizzes = QuizAttempt::where('student_id', $user_id)
+            ->where('status', 'graded')
+            ->join('quizzes', 'quizzes.id', '=', 'quiz_attempts.quiz_id')
+            ->join('lessons', 'lessons.id', '=', 'quizzes.lesson_id')
+            ->whereIn('lessons.course_id', $courseIds)
+            ->selectRaw('lessons.course_id, count(*) as total')
+            ->groupBy('lessons.course_id')
+            ->pluck('total', 'course_id');
+
+        $data = $enrollments->map(function ($enroll) use ($totalQuizzes, $gradedQuizzes) {
+            $course = $enroll->course;
+            $total = $totalQuizzes[$course->id] ?? 0;
+            $graded = $gradedQuizzes[$course->id] ?? 0;
 
             return [
                 'course_id' => $course->id,
                 'title' => $course->title,
                 'tutor' => $course->tutor->name,
                 'enrolled_at' => $enroll->enrolled_at,
-                'total_quizzes' => $totalQuizzes,
-                'completed_quizzes' => $gradedQuizzes,
-                'progress_percent' => $totalQuizzes > 0 ? round(($gradedQuizzes / $totalQuizzes) * 100) : 0
+                'total_quizzes' => $total,
+                'completed_quizzes' => $graded,
+                'progress_percent' => $total > 0 ? round(($graded / $total) * 100) : 0
             ];
         });
 
@@ -72,36 +85,28 @@ class StudentController extends Controller
         if (!$enrolled) return response()->json(['message' => 'Not enrolled in this course'], 403);
 
         $lessons = Lesson::where('course_id', $course_id)
-            ->with('quiz:id,lesson_id,title,duration_minutes')
+            ->with([
+                'quiz:id,lesson_id,title,duration_minutes',
+                'quiz.attempts' => function ($q) use ($user_id) {
+                    $q->where('student_id', $user_id)->latest();
+                }
+            ])
             ->orderBy('id')
             ->get()
-            ->map(function ($lesson) use ($user_id) {
+            ->map(function ($lesson) {
                 $quiz = $lesson->quiz;
-                $attempt = null;
-                $status = 'not_started';
-                $score = null;
-
-                if ($quiz) {
-                    $attempt = QuizAttempt::where('quiz_id', $quiz->id)
-                        ->where('student_id', $user_id)
-                        ->latest()->first();
-
-                    if ($attempt) {
-                        $status = $attempt->status;
-                        $score = $attempt->score;
-                    }
-                }
+                $attempt = $quiz?->attempts->first();
 
                 return [
                     'lesson_id' => $lesson->id,
                     'title' => $lesson->title,
-                    'has_quiz' => $quiz ? true : false,
+                    'has_quiz' => (bool) $quiz,
                     'quiz_id' => $quiz->id ?? null,
                     'quiz_title' => $quiz->title ?? null,
                     'duration_minutes' => $quiz->duration_minutes ?? null,
                     'attempt_id' => $attempt->id ?? null,
-                    'status' => $status,
-                    'score' => $score,
+                    'status' => $attempt->status ?? 'not_started',
+                    'score' => $attempt->score ?? null,
                     'submitted_at' => $attempt->submitted_at ?? null
                 ];
             });
@@ -111,7 +116,6 @@ class StudentController extends Controller
             'lessons' => $lessons
         ]);
     }
-
     /**
      * POST /student/quizzes/{quiz_id}/start
      * Create new quiz attempt or resume existing in_progress one
@@ -166,7 +170,7 @@ class StudentController extends Controller
 
         $validator = Validator::make($request->all(), [
             'answers' => 'required|array|min:1',
-            'answers.*.question_id' => 'required|exists:questions,id',
+            'answers.*.question_id' => 'required|exists:questions,id|distinct',
             'answers.*.answer' => 'required|string'
         ]);
         if ($validator->fails()) return response()->json($validator->errors(), 422);
