@@ -14,7 +14,7 @@ class Course extends Model
     protected $keyType = 'int';
     public $timestamps = true;
 
-    protected $fillable = ['tutor_id', 'title', 'description', 'type', 'price'];
+    protected $fillable = ['tutor_id', 'title', 'description', 'type', 'price', 'education_level'];
 
     protected $casts = [
         'price' => 'decimal:2'

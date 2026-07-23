@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Notifications\ResetPasswordCode;
+use App\Http\Requests\Auth\ChangePasswordRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
@@ -21,6 +22,7 @@ class AuthController extends Controller
             'email' => 'required|string|email|max:255|unique:users',
             'password' => 'required|string|min:8|confirmed',
             'role' => 'required|in:student,tutor', // admin blocked
+            'education_level' => 'required|in:basic,secondary',
         ]);
 
         $user = User::create([
@@ -28,6 +30,7 @@ class AuthController extends Controller
             'email' => $request->email,
             'password' => Hash::make($request->password),
             'role' => $request->role,
+            'education_level' => $request->education_level,
             'is_approved' => $request->role === 'tutor' ? false : true,
         ]);
 
@@ -42,6 +45,7 @@ class AuthController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'role' => $user->role,
+                'education_level' => $user->education_level,
                 'is_approved' => $user->is_approved,
             ],
             'token' => $token
@@ -73,6 +77,7 @@ class AuthController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'role' => $user->role,
+                'education_level' => $user->education_level,
                 'is_approved' => $user->is_approved,
             ],
             'token' => $token,
@@ -84,9 +89,17 @@ class AuthController extends Controller
     // Forgot Password - sends 6-digit code to email
     public function forgotPassword(Request $request)
     {
-        $request->validate(['email' => 'required|email|exists:users,email']);
+        $request->validate([
+            'email' => 'required|email',
+        ]);
 
         $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json([
+                'message' => 'Email not found'
+            ], 404);
+        }
         
         // Generate 6-digit code
         $code = random_int(100000, 999999);
@@ -103,8 +116,17 @@ class AuthController extends Controller
             'updated_at' => Carbon::now(),
         ]);
         
-        // Send code via email
-        $user->notify(new ResetPasswordCode($code));
+        // Send code via Resend
+        try {
+            $notification = new ResetPasswordCode($code);
+            $notification->send($user);
+        } catch (\Exception $e) {
+            $errorMessage = $e->getMessage();
+            \Log::error('Failed to send password reset code: ' . $errorMessage);
+            return response()->json([
+                'message' => 'Failed to send code. Error: ' . $errorMessage
+            ], 500);
+        }
 
         return response()->json(['message' => '6-digit code sent to your email']);
     }
@@ -114,9 +136,17 @@ class AuthController extends Controller
     {
         $request->validate([
             'code' => 'required|digits:6',
-            'email' => 'required|email|exists:users,email',
+            'email' => 'required|email',
             'password' => 'required|string|min:8|confirmed',
         ]);
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json([
+                'message' => 'Email not found'
+            ], 404);
+        }
 
         // Verify code exists and hasn't expired
         $resetCode = DB::table('password_reset_codes')
@@ -124,12 +154,19 @@ class AuthController extends Controller
             ->where('code', $request->code)
             ->first();
         
-        if (!$resetCode || Carbon::parse($resetCode->expires_at)->isPast()) {
-            return response()->json(['message' => 'Invalid or expired code'], 400);
+        if (!$resetCode) {
+            return response()->json([
+                'message' => 'Invalid code'
+            ], 400);
+        }
+
+        if (Carbon::parse($resetCode->expires_at)->isPast()) {
+            return response()->json([
+                'message' => 'Code has expired'
+            ], 400);
         }
         
         // Update password
-        $user = User::where('email', $request->email)->first();
         $user->update(['password' => Hash::make($request->password)]);
         
         // Delete used code
@@ -138,7 +175,38 @@ class AuthController extends Controller
             ->where('code', $request->code)
             ->delete();
 
-        return response()->json(['message' => 'Password reset successful']);
+        return response()->json([
+            'message' => 'Password reset successful'
+        ], 200);
+    }
+
+    // Change Password - requires old password verification
+    public function changePassword(ChangePasswordRequest $request)
+    {
+        $user = $request->user();
+
+        // Verify current password matches
+        if (!Hash::check($request->current_password, $user->password)) {
+            return response()->json([
+                'message' => 'Current password is incorrect'
+            ], 422);
+        }
+
+        // Prevent using same password as new password
+        if (Hash::check($request->new_password, $user->password)) {
+            return response()->json([
+                'message' => 'New password must be different from current password'
+            ], 422);
+        }
+
+        // Update password
+        $user->update([
+            'password' => Hash::make($request->new_password)
+        ]);
+
+        return response()->json([
+            'message' => 'Password changed successfully'
+        ], 200);
     }
 
     // Logout

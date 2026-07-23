@@ -19,6 +19,10 @@ class Enrollment extends Model
         'enrolled_at'
     ];
 
+    protected $casts = [
+        'enrolled_at' => 'datetime',
+    ];
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);

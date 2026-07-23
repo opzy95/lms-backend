@@ -29,12 +29,15 @@ class CourseController extends Controller
             return response()->json(['message' => 'Paid courses must have price > 0'], 422);
         }
 
+        $tutor = $request->user();
+
         $course = Course::create([
-            'tutor_id' => $request->user()->id,
+            'tutor_id' => $tutor->id,
             'title' => $request->title,
             'description' => $request->description,
             'type' => $request->type,
-            'price' => $price
+            'price' => $price,
+            'education_level' => $tutor->education_level
         ]);
 
         return response()->json([
@@ -57,6 +60,25 @@ class CourseController extends Controller
         
         $courses = $query->latest()->get();
         return response()->json($courses);
+    }
+
+    // GET /api/tutor/courses-with-lessons - List courses with their lessons
+    public function coursesWithLessons(Request $request)
+    {
+        $user = $request->user();
+        
+        $courses = Course::where('tutor_id', $user->id)
+            ->with(['lessons' => function ($query) {
+                $query->orderBy('order', 'asc');
+            }])
+            ->latest()
+            ->get();
+        
+        return response()->json([
+            'message' => 'Courses with lessons retrieved successfully',
+            'data' => $courses,
+            'total' => $courses->count()
+        ]);
     }
 
     // PUT /api/tutor/courses/{id} - Update course
@@ -122,21 +144,58 @@ class CourseController extends Controller
 
     return response()->json($course);
 }
-public function index()
+public function index(Request $request)
 {
-    $courses = Course::latest()->get(['id','title','description','type','price','tutor_id','created_at']);
+    $user = $request->user();
+    
+    $query = Course::query()->latest();
+    
+    // If user is a student, filter by their education level
+    if ($user && $user->role === 'student' && $user->education_level) {
+        $query->where('education_level', $user->education_level);
+    }
+    
+    $courses = $query->get(['id','title','description','type','price','education_level','tutor_id','created_at']);
     return response()->json($courses);
 }
 
 // GET /api/courses/{id} - Public single course
 public function showPublic($id)
 {
-    $course = Course::find($id, ['id','title','description','type','price','tutor_id','created_at']);
+    $course = Course::find($id, ['id','title','description','type','price','education_level','tutor_id','created_at']);
     
     if (!$course) {
         return response()->json(['message' => 'Course not found'], 404);
     }
     
     return response()->json($course);
+}
+
+// GET /api/courses/recommendations/similar - Get recommended courses based on education level
+public function getRecommendations(Request $request)
+{
+    $user = $request->user();
+    
+    if (!$user) {
+        return response()->json(['message' => 'Unauthorized'], 401);
+    }
+
+    // Get courses matching user's education level that they're not enrolled in
+    $enrolledCourseIds = Enrollment::where('user_id', $user->id)
+        ->pluck('course_id')
+        ->toArray();
+
+    $recommendedCourses = Course::where('education_level', $user->education_level)
+        ->whereNotIn('id', $enrolledCourseIds)
+        ->where('tutor_id', '!=', $user->id) // Don't recommend own courses for tutors
+        ->latest()
+        ->limit(10)
+        ->get(['id', 'title', 'description', 'type', 'price', 'education_level', 'tutor_id', 'created_at']);
+
+    return response()->json([
+        'message' => 'Recommended courses retrieved successfully',
+        'data' => $recommendedCourses,
+        'total' => $recommendedCourses->count()
+    ]);
 }
 }

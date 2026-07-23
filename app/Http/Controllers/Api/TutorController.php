@@ -5,12 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Course;
 use App\Models\Enrollment;
+use App\Models\User;
 use App\Models\Lesson;
 use App\Models\Quiz;
 use App\Models\QuizAnswer;
 use App\Models\QuizAttempt;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Storage;
 
 class TutorController extends Controller
 {
@@ -48,6 +50,17 @@ class TutorController extends Controller
             'course' => $course
         ], 201);
     }
+
+   
+
+public function tutors()
+{
+    $tutors = User::where('role', 'tutor')
+        ->select('id', 'name', 'email')
+        ->get();
+
+    return response()->json($tutors);
+}
 
     // GET /api/tutor/courses - list only this tutor's courses
     public function index(Request $request)
@@ -91,49 +104,117 @@ class TutorController extends Controller
 }
 
   public function dashboard()
-{
-    $tutorId = auth()->id();
+    {
+        try {
+            $user = auth()->user();
 
-    $courses = Course::where('tutor_id', $tutorId)
-        ->withCount('lessons')
-        ->get();
+            $response = [
+                'success' => true,
+                'data' => [
+                    'user' => [
+                        'id' => $user->id,
+                        'name' => $user->name,
+                        'first_name' => $user->first_name,
+                        'last_name' => $user->last_name,
+                        'email' => $user->email,
+                        'phone' => $user->phone_number,
+                        'title' => $user->title,
+                        'biography' => $user->biography,
+                        'location' => $user->location,
+                        'avatar_url' => $user->avatar_url ?? null,
+                        'is_approved' => $user->is_approved,
+                    ],
+                    'core_subjects' => $user->core_subjects ?? [],
+                    'qualifications' => $this->getQualifications($user),
+                ]
+            ];
 
-    $courseIds = $courses->pluck('id');
+            return response()->json($response);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to load dashboard',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
 
-    // One query: enrollment counts per course
-    $enrollCounts = Enrollment::whereIn('course_id', $courseIds)
-        ->selectRaw('course_id, count(*) as total')
-        ->groupBy('course_id')
-        ->pluck('total', 'course_id');
+    public function updateDashboard(Request $request)
+    {
+        $user = $request->user();
 
-    // One query: active (distinct) students per course
-    $activeCounts = QuizAttempt::join('quizzes', 'quizzes.id', '=', 'quiz_attempts.quiz_id')
-        ->join('lessons', 'lessons.id', '=', 'quizzes.lesson_id')
-        ->whereIn('lessons.course_id', $courseIds)
-        ->selectRaw('lessons.course_id, count(distinct quiz_attempts.student_id) as total')
-        ->groupBy('lessons.course_id')
-        ->pluck('total', 'course_id');
+        $validator = Validator::make($request->all(), [
+            'title' => 'nullable|string|max:50',
+            'first_name' => 'nullable|string|max:255',
+            'last_name' => 'nullable|string|max:255',
+            'phone' => 'nullable|string|unique:users,phone_number,' . $user->id,
+            'location' => 'nullable|string|max:255',
+            'biography' => 'nullable|string|max:1000',
+            'core_subjects' => 'nullable|array',
+            'core_subjects.*' => 'string|max:100',
+            'avatar_url' => 'nullable|url',
+        ]);
 
-    // One query: pending essays per course
-    $pendingCounts = QuizAnswer::whereNull('graded_at')
-        ->whereHas('question', fn($q) => $q->where('type', 'essay'))
-        ->whereHas('attempt.quiz.lesson', fn($q) => $q->whereIn('course_id', $courseIds))
-        ->with('attempt.quiz.lesson:id,course_id')
-        ->get()
-        ->groupBy('attempt.quiz.lesson.course_id')
-        ->map->count();
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
 
-    return response()->json($courses->map(function ($course) use ($enrollCounts, $activeCounts, $pendingCounts) {
-        return [
-            'course_id' => $course->id,
-            'title' => $course->title,
-            'lessons_count' => $course->lessons_count,
-            'total_enrolled' => $enrollCounts[$course->id] ?? 0,
-            'active_students' => $activeCounts[$course->id] ?? 0,
-            'pending_essays' => $pendingCounts[$course->id] ?? 0,
-        ];
-    }));
-}
+        try {
+            $data = $request->only([
+                'title',
+                'first_name',
+                'last_name',
+                'location',
+                'biography',
+                'core_subjects',
+                'avatar_url'
+            ]);
+
+            // Handle phone field mapping
+            if ($request->has('phone')) {
+                $data['phone_number'] = $request->phone;
+            }
+
+            // Remove null values to only update provided fields
+            $data = array_filter($data, function ($value) {
+                return $value !== null;
+            });
+
+            $user->update($data);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Dashboard updated successfully',
+                'data' => [
+                    'user' => [
+                        'id' => $user->id,
+                        'name' => $user->name,
+                        'first_name' => $user->first_name,
+                        'last_name' => $user->last_name,
+                        'email' => $user->email,
+                        'phone' => $user->phone_number,
+                        'title' => $user->title,
+                        'biography' => $user->biography,
+                        'location' => $user->location,
+                        'avatar_url' => $user->avatar_url ?? null,
+                        'is_approved' => $user->is_approved,
+                    ],
+                    'core_subjects' => $user->core_subjects ?? [],
+                    'qualifications' => $this->getQualifications($user),
+                ]
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update dashboard',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
 
      public function courseStudents($course_id)
     {
@@ -180,8 +261,8 @@ class TutorController extends Controller
         $enrolled = Enrollment::with('user:id,name,email')
             ->where('course_id', $lesson->course_id)->get();
 
-        $submittedIds = $quiz ? 
-            QuizAttempt::where('quiz_id', $quiz->id)->pluck('user_id') : 
+        $submittedIds = $quiz ?
+            QuizAttempt::where('quiz_id', $quiz->id)->pluck('student_id') :
             collect();
 
         $students = $enrolled->map(function($e) use ($submittedIds) {
@@ -201,5 +282,189 @@ class TutorController extends Controller
             'students' => $students
         ]);
     }
-    
+
+    /**
+     * GET /api/tutor/profile
+     * Get tutor profile with all information
+     */
+    public function getProfile(Request $request)
+    {
+        $user = $request->user();
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'user' => [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'first_name' => $user->first_name,
+                    'last_name' => $user->last_name,
+                    'email' => $user->email,
+                    'phone' => $user->phone_number,
+                    'title' => $user->title,
+                    'biography' => $user->biography,
+                    'location' => $user->location,
+                    'avatar_url' => $user->avatar_url ?? null,
+                    'is_approved' => $user->is_approved,
+                ],
+                'core_subjects' => $user->core_subjects ?? [],
+                'qualifications' => $this->getQualifications($user),
+            ]
+        ], 200);
+    }
+
+    /**
+     * PUT /api/tutor/profile
+     * Update tutor profile
+     */
+    public function updateProfile(Request $request)
+    {
+        $user = $request->user();
+
+        $validator = Validator::make($request->all(), [
+            'title' => 'nullable|string|max:50',
+            'first_name' => 'nullable|string|max:255',
+            'last_name' => 'nullable|string|max:255',
+            'phone' => 'nullable|string|unique:users,phone_number,' . $user->id,
+            'location' => 'nullable|string|max:255',
+            'biography' => 'nullable|string|max:1000',
+            'school_name' => 'nullable|string|max:255',
+            'core_subjects' => 'nullable|array',
+            'core_subjects.*' => 'string|max:100',
+            'qualifications' => 'nullable|array',
+            'qualifications.*.degree' => 'string|max:255',
+            'qualifications.*.institution' => 'string|max:255',
+            'qualifications.*.year' => 'integer|min:1950|max:' . date('Y'),
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            // Map phone to phone_number for database
+            $data = $request->only([
+                'title',
+                'first_name',
+                'last_name',
+                'location',
+                'biography',
+                'school_name',
+                'core_subjects'
+            ]);
+
+            // Handle phone field mapping
+            if ($request->has('phone')) {
+                $data['phone_number'] = $request->phone;
+            }
+
+            // Remove null values to only update provided fields
+            $data = array_filter($data, function ($value) {
+                return $value !== null;
+            });
+
+            $user->update($data);
+
+            // Store qualifications (you may want to create a separate table for this)
+            // For now, we'll return them as provided
+            $qualifications = $request->qualifications ?? [];
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'user' => [
+                        'id' => $user->id,
+                        'name' => $user->name,
+                        'first_name' => $user->first_name,
+                        'last_name' => $user->last_name,
+                        'email' => $user->email,
+                        'phone' => $user->phone_number,
+                        'title' => $user->title,
+                        'biography' => $user->biography,
+                        'location' => $user->location,
+                        'avatar_url' => $user->avatar_url ?? null,
+                        'is_approved' => $user->is_approved,
+                    ],
+                    'core_subjects' => $user->core_subjects ?? [],
+                    'qualifications' => $qualifications,
+                ]
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update profile',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Upload tutor profile picture/avatar
+     * POST /api/tutor/upload-avatar
+     */
+    public function uploadAvatar(Request $request)
+    {
+        $user = $request->user();
+
+        $validator = Validator::make($request->all(), [
+            'avatar' => 'required|image|mimes:jpeg,png,jpg,gif|max:5120', // 5MB
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            $file = $request->file('avatar');
+            $filename = 'avatar_' . $user->id . '_' . time() . '.' . $file->getClientOriginalExtension();
+
+            // Store file in avatars directory
+            $filePath = $file->storeAs('avatars', $filename, 'public');
+
+            // Delete old avatar if it exists
+            if ($user->avatar_url) {
+                $oldPath = str_replace(config('app.url') . '/storage/', '', $user->avatar_url);
+                if (Storage::disk('public')->exists($oldPath)) {
+                    Storage::disk('public')->delete($oldPath);
+                }
+            }
+
+            // Update user avatar URL
+            $avatarUrl = Storage::disk('public')->url($filePath);
+            $user->update(['avatar_url' => $avatarUrl]);
+
+            return response()->json([
+                'message' => 'Avatar uploaded successfully',
+                'data' => [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'avatar_url' => $user->avatar_url,
+                ]
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Failed to upload avatar',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Helper function to get qualifications
+     * Can be extended to fetch from a separate qualifications table
+     */
+    private function getQualifications($user)
+    {
+        // This is a placeholder - you may want to create a tutor_qualifications table
+        // For now, return empty array
+        return [];
+    }
 }

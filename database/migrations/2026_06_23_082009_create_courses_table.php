@@ -18,6 +18,7 @@ return new class extends Migration
             $table->text('description');
             $table->enum('type', ['free', 'paid'])->default('free');
             $table->decimal('price', 8, 2)->default(0);
+            $table->enum('education_level', ['basic', 'secondary'])->nullable();
             $table->timestamps();
         });
     }
