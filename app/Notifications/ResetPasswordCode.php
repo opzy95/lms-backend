@@ -68,7 +68,7 @@ class ResetPasswordCode extends Notification
             <p>Hello {$name},</p>
             <p>Your password reset code is:</p>
             <div class="code">{$this->code}</div>
-            <p>This code expires in 15 minutes.</p>
+            <p>This code expires in 10 minutes.</p>
             <p>If you did not request a password reset, please ignore this email.</p>
             <p>Best regards,<br>EduGrowth Team</p>
         </div>
@@ -88,7 +88,7 @@ Hello {$name},
 
 Your password reset code is: {$this->code}
 
-This code expires in 15 minutes.
+This code expires in 10 minutes.
 
 If you did not request a password reset, please ignore this email.
 

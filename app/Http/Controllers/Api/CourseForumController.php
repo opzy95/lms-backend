@@ -11,11 +11,6 @@ use Illuminate\Http\Request;
 
 class CourseForumController extends Controller
 {
-    public function __construct()
-    {
-        // $this->middleware('auth:sanctum');
-    }
-
     /**
      * Get badge based on role.
      */
@@ -55,7 +50,7 @@ class CourseForumController extends Controller
     public function index($course_id)
     {
         $userId = auth()->id();
-
+        \Log::info($userId);
         // Debug logging
         \Log::info('Forum index access attempt', [
             'user_id' => $userId,

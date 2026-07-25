@@ -48,28 +48,32 @@ Route::middleware('auth:sanctum')->group(function () {
         return $request->user();
     });
 
-    // live class route 
+    // Course recommendations for authenticated users
+    Route::get('/courses/recommendations/similar', [CourseController::class, 'getRecommendations']);
 
+    // Fallback routes for student details (for AdminStudentDetails component)
+    Route::middleware('role:admin')->group(function () {
+        Route::get('/students/{id}', [AdminController::class, 'getStudentDetails']);
+        Route::get('/users/{id}', [AdminController::class, 'getStudentDetails']);
+    });
+
+    // Live class routes (general - accessible to all authenticated users)
     Route::get('/courses/{course_id}/live-classes', [LiveClassController::class, 'index']);
     Route::get('/live-classes', [LiveClassController::class, 'studentIndex']);
     Route::get('/live-classes/status/{status}', [LiveClassController::class, 'studentIndexByStatus']);
     Route::get('/live-classes/{id}', [LiveClassController::class, 'studentShow']);
     Route::post('/live-classes/{id}/join', [LiveClassController::class, 'studentJoin']);
     Route::post('/live-classes/{id}/leave', [LiveClassController::class, 'studentLeave']);
-});
-
-    // Course recommendations for authenticated users
-    Route::get('/courses/recommendations/similar', [CourseController::class, 'getRecommendations']);
 
     /*
     |--------------------------------------------------------------------------
-    | Forum
+    | Forum (Authenticated users)
     |--------------------------------------------------------------------------
     */
-
     Route::get('/courses/{course_id}/forum', [CourseForumController::class, 'index']);
     Route::post('/courses/{course_id}/forum/ask', [CourseForumController::class, 'ask']);
     Route::post('/forum/{thread_id}/reply', [CourseForumController::class, 'reply']);
+});
 
 /*
 |--------------------------------------------------------------------------
@@ -85,8 +89,11 @@ Route::middleware(['auth:sanctum', 'role:admin'])
         Route::get('/stats', [AdminController::class, 'stats']);
 
         Route::get('/students', [AdminController::class, 'getStudents']);
+        Route::get('/students/{id}', [AdminController::class, 'getStudentDetails']);
 
         Route::get('/tutors', [AdminController::class, 'allTutors']);
+        Route::get('/tutors/{id}', [AdminController::class, 'getTutorDetails']);
+        Route::get('/tutors/{id}/documents', [AdminController::class, 'getTutorDocuments']);
         Route::get('/tutors/pending', [AdminController::class, 'pendingTutors']);
 
         Route::put(
@@ -97,6 +104,7 @@ Route::middleware(['auth:sanctum', 'role:admin'])
         Route::post('/reject-tutor/{id}', [AdminController::class, 'rejectTutor']);
 
         Route::get('/users', [AdminController::class, 'allUsers']);
+        Route::get('/users/{id}', [AdminController::class, 'getStudentDetails']); // Fallback for students
         Route::get('/courses', [AdminController::class, 'allCourses']);
 
         Route::post('/publish-course/{id}', [AdminController::class, 'publishCourse']);
@@ -157,17 +165,13 @@ Route::middleware(['auth:sanctum', 'role:tutor', 'approved'])
         Route::delete('/live-classes/{id}', [LiveClassController::class, 'tutorDestroy']);
         Route::get('/live-classes/{id}/attendance', [LiveClassController::class, 'tutorAttendance']);
 
-        // Forum - Tutors can post threads and reply
-        Route::get('/courses/{course_id}/forum', [CourseForumController::class, 'index']);
-        Route::post('/courses/{course_id}/forum/ask', [CourseForumController::class, 'ask']);
-        Route::post('/forum/{thread_id}/reply', [CourseForumController::class, 'reply']);
-
         // Tutor Documents
         Route::post('/documents', [TutorDocumentController::class, 'uploadDocument']);
         Route::get('/documents', [TutorDocumentController::class, 'getDocuments']);
         Route::get('/documents/{id}', [TutorDocumentController::class, 'getDocument']);
         Route::delete('/documents/{id}', [TutorDocumentController::class, 'deleteDocument']);
     });
+
 
 /*
 |--------------------------------------------------------------------------
@@ -214,9 +218,4 @@ Route::middleware(['auth:sanctum', 'role:student'])
         Route::post('/quizzes/{quiz_id}/start', [StudentController::class, 'startQuiz']);
         Route::post('/quiz-attempts/{attempt_id}/submit', [StudentController::class, 'submitQuiz']);
         Route::get('/quiz-attempts/{attempt_id}', [StudentController::class, 'viewAttempt']);
-
-        // Forum - Students can view discussions and post replies
-        Route::get('/courses/{course_id}/forum', [CourseForumController::class, 'index']);
-        Route::post('/courses/{course_id}/forum/ask', [CourseForumController::class, 'ask']);
-        Route::post('/forum/{thread_id}/reply', [CourseForumController::class, 'reply']);
     });

@@ -318,4 +318,209 @@ public function approveTutor($id)
             ]
         ]);
     }
+
+    /**
+     * Get single tutor details with statistics
+     * GET /api/admin/tutors/{id}
+     */
+    public function getTutorDetails($id)
+    {
+        $tutor = User::where('id', $id)
+            ->where('role', 'tutor')
+            ->first();
+
+        if (!$tutor) {
+            return response()->json([
+                'message' => 'Tutor not found'
+            ], 404);
+        }
+
+        // Get tutor statistics
+        $studentCount = \App\Models\Enrollment::whereHas('course', function ($query) use ($tutor) {
+            $query->where('tutor_id', $tutor->id);
+        })->distinct('user_id')->count();
+
+        // Calculate average rating from course enrollments or feedback
+        // For now, using a placeholder. You can implement actual rating logic
+        $averageRating = 4.5; // Placeholder
+
+        // Get tutor's core subjects (already stored as JSON array)
+        $subjects = $tutor->core_subjects ?? [];
+
+        // Determine status
+        $status = 'Active';
+        if (!$tutor->is_approved) {
+            $status = 'Under Review';
+        } elseif ($tutor->is_approved && $tutor->tutorDocuments()->where('status', 'approved')->count() < 2) {
+            $status = 'Pending';
+        }
+
+        $data = [
+            'id' => $tutor->id,
+            'name' => $tutor->name,
+            'full_name' => $tutor->name,
+            'first_name' => $tutor->first_name,
+            'last_name' => $tutor->last_name,
+            'email' => $tutor->email,
+            'avatar' => $tutor->avatar_url,
+            'profile_photo' => $tutor->avatar_url,
+            'role' => $tutor->role,
+            'user_type' => $tutor->role,
+            'title' => $tutor->title,
+            'phone' => $tutor->phone_number,
+            'location' => $tutor->location,
+            'biography' => $tutor->biography,
+            'school_name' => $tutor->school_name,
+            'subjects' => $subjects,
+            'core_subjects' => $subjects,
+            'rating' => $averageRating,
+            'average_rating' => $averageRating,
+            'students' => $studentCount,
+            'student_count' => $studentCount,
+            'is_verified' => $tutor->is_approved,
+            'is_approved' => $tutor->is_approved,
+            'verified' => $tutor->is_approved,
+            'approved' => $tutor->is_approved,
+            'status' => $status,
+            'created_at' => $tutor->created_at,
+            'education_level' => $tutor->education_level,
+        ];
+
+        return response()->json([
+            'data' => $data
+        ]);
+    }
+
+    /**
+     * Get tutor documents
+     * GET /api/admin/tutors/{id}/documents
+     */
+    public function getTutorDocuments($id)
+    {
+        $tutor = User::where('id', $id)
+            ->where('role', 'tutor')
+            ->first();
+
+        if (!$tutor) {
+            return response()->json([
+                'message' => 'Tutor not found'
+            ], 404);
+        }
+
+        $documents = \App\Models\TutorDocument::where('user_id', $tutor->id)
+            ->orderBy('created_at', 'desc')
+            ->get()
+            ->map(function ($doc) {
+                return [
+                    'id' => $doc->id,
+                    'document_name' => $doc->document_name,
+                    'document_type' => strtoupper($doc->document_type),
+                    'file_path' => $doc->file_path,
+                    'file_url' => \Illuminate\Support\Facades\Storage::disk('public')->url($doc->file_path),
+                    'status' => $doc->status,
+                    'created_at' => $doc->created_at,
+                    'updated_at' => $doc->updated_at,
+                    'uploaded_at' => $doc->uploaded_at ?? $doc->created_at,
+                    'approved_at' => $doc->approved_at,
+                    'admin_notes' => $doc->admin_notes,
+                ];
+            });
+
+        return response()->json([
+            'data' => $documents
+        ]);
+    }
+
+    /**
+     * Get single student details with statistics
+     * GET /api/admin/students/{id}
+     */
+    public function getStudentDetails($id)
+    {
+        $student = User::where('id', $id)
+            ->where('role', 'student')
+            ->with(['enrollments.course', 'growth'])
+            ->first();
+
+        if (!$student) {
+            return response()->json([
+                'message' => 'Student not found'
+            ], 404);
+        }
+
+        // Get enrollment statistics
+        $enrollmentCount = $student->enrollments()->count();
+        $uniqueCourseCount = $student->enrollments()->distinct('course_id')->count();
+        
+        // Get academic standing based on growth data or quiz performance
+        $academicStanding = 'Average'; // Default
+        $growth = $student->growth;
+        if ($growth) {
+            $level = $growth->level ?? 1;
+            $averageScore = $growth->average_score ?? 0;
+            
+            if ($level >= 8 || $averageScore >= 80) {
+                $academicStanding = 'Excellent';
+            } elseif ($level >= 5 || $averageScore >= 65) {
+                $academicStanding = 'Good';
+            } elseif ($level >= 3 || $averageScore >= 50) {
+                $academicStanding = 'Average';
+            } else {
+                $academicStanding = 'At Risk';
+            }
+        }
+
+        // Generate avatar color based on student ID
+        $colors = ['#2563eb', '#16a34a', '#dc2626', '#7c3aed', '#ea580c', '#0891b2', '#be123c', '#4338ca'];
+        $avatarColor = $colors[$student->id % count($colors)];
+
+        // Format grade/level
+        $grade = $student->education_level 
+            ? ucfirst($student->education_level) . ' Level'
+            : 'N/A';
+
+        // Get enrollment date (first enrollment or account creation)
+        $enrollmentDate = $student->enrollments()
+            ->orderBy('created_at', 'asc')
+            ->first()?->created_at ?? $student->created_at;
+
+        $data = [
+            'id' => $student->id,
+            'name' => $student->name,
+            'first_name' => $student->first_name ?? explode(' ', $student->name)[0] ?? '',
+            'last_name' => $student->last_name ?? (count(explode(' ', $student->name)) > 1 
+                ? implode(' ', array_slice(explode(' ', $student->name), 1)) 
+                : ''),
+            'email' => $student->email,
+            'phone' => $student->phone_number ?? 'No phone provided',
+            'phone_number' => $student->phone_number ?? 'No phone provided',
+            'grade' => $grade,
+            'level' => $grade,
+            'education_level' => $student->education_level,
+            'courses' => $uniqueCourseCount,
+            'enrolled_courses' => $uniqueCourseCount,
+            'course_count' => $uniqueCourseCount,
+            'total_enrollments' => $enrollmentCount,
+            'standing' => $academicStanding,
+            'academic_standing' => $academicStanding,
+            'status' => 'Active', // You can add logic here for different statuses
+            'is_active' => true,
+            'enrollment_date' => $enrollmentDate,
+            'created_at' => $student->created_at,
+            'avatar_color' => $avatarColor,
+            'color' => $avatarColor,
+            'avatar_url' => $student->avatar_url,
+            // Additional growth/gamification data
+            'growth_level' => $growth?->level ?? 1,
+            'growth_xp' => $growth?->xp ?? 0,
+            'growth_streaks' => $growth?->streaks ?? 0,
+            'quizzes_completed' => $growth?->total_quizzes_completed ?? 0,
+            'lessons_completed' => $growth?->total_lessons_completed ?? 0,
+            'average_score' => $growth?->average_score ?? 0,
+        ];
+
+        return response()->json([
+            'data' => $data
+        ]);
+    }
 }

@@ -37,10 +37,12 @@ class TutorDocumentController extends Controller
         }
 
         $validator = Validator::make($request->all(), [
-            'document_type' => 'required|in:ssce,nce,degree,other',
+            'document_type' => 'required|in:SSCE,NCE,Degree,other',
             'document_name' => 'required|string|max:255',
             'file' => 'required|file|mimes:' . implode(',', $this->allowedMimes) . '|max:' . ($this->maxFileSize * 1024),
         ]);
+
+        // /Log($validator);
 
         if ($validator->fails()) {
             return response()->json([

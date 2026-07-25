@@ -82,7 +82,7 @@ class AuthController extends Controller
             ],
             'token' => $token,
             'success' => true,
-            'message' => 'Login route working'
+            'message' => 'Login successfully'
         ]);
             
     }
@@ -111,7 +111,7 @@ class AuthController extends Controller
         DB::table('password_reset_codes')->insert([
             'email' => $request->email,
             'code' => $code,
-            'expires_at' => Carbon::now()->addHour(),
+            'expires_at' => Carbon::now()->addMinutes(10),
             'created_at' => Carbon::now(),
             'updated_at' => Carbon::now(),
         ]);

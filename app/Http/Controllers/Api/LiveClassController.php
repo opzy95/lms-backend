@@ -12,6 +12,42 @@ use Illuminate\Support\Facades\Auth;
 
 class LiveClassController extends Controller
 {
+    // ==================== GENERAL ENDPOINTS ====================
+
+    /**
+     * GET /api/courses/{course_id}/live-classes - List live classes for a specific course
+     */
+    public function index($course_id)
+    {
+        $userId = Auth::id();
+        $course = \App\Models\Course::findOrFail($course_id);
+
+        // Check if user is enrolled in this course or is the tutor
+        $isEnrolled = Enrollment::where('user_id', $userId)
+            ->where('course_id', $course_id)
+            ->exists();
+
+        $isTutor = $course->tutor_id === $userId;
+
+        if (!$isEnrolled && !$isTutor) {
+            return response()->json([
+                'message' => 'You are not enrolled in this course'
+            ], 403);
+        }
+
+        $classes = LiveClass::where('course_id', $course_id)
+            ->orderBy('start_time', 'desc')
+            ->get()
+            ->map(function ($class) use ($userId) {
+                return $this->formatLiveClassResponseForStudent($class, $userId);
+            });
+
+        return response()->json([
+            'message' => 'Live classes retrieved successfully',
+            'data' => $classes
+        ]);
+    }
+
     // ==================== TUTOR ENDPOINTS ====================
 
     /**
