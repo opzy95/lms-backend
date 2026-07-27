@@ -3,25 +3,27 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Auth\ChangePasswordRequest;
 use App\Models\User;
 use App\Notifications\ResetPasswordCode;
-use App\Http\Requests\Auth\ChangePasswordRequest;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\ValidationException;
 use Carbon\Carbon;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
-    // POST /api/register
+    /**
+     * Register
+     */
     public function register(Request $request)
     {
         $request->validate([
             'name' => 'required|string|max:255',
-            'email' => 'required|string|email|max:255|unique:users',
+            'email' => 'required|email|max:255|unique:users',
             'password' => 'required|string|min:8|confirmed',
-            'role' => 'required|in:student,tutor', // admin blocked
+            'role' => 'required|in:student,tutor',
             'education_level' => 'required|in:basic,secondary',
         ]);
 
@@ -34,12 +36,25 @@ class AuthController extends Controller
             'is_approved' => $request->role === 'tutor' ? false : true,
         ]);
 
-        $token = $user->createToken('auth_token')->plainTextToken;
+        $days = 7;
+
+        $tokenResult = $user->createToken(
+            'auth_token',
+            ['*'],
+            now()->addDays($days)
+        );
+
+        $accessToken = $user->tokens()->latest('id')->first();
 
         return response()->json([
-            'message' => $user->role === 'tutor' 
-                ? 'Registration successful. Wait for admin approval.' 
+            'success' => true,
+            'message' => $user->role === 'tutor'
+                ? 'Registration successful. Wait for admin approval.'
                 : 'Registration successful',
+
+            'token' => $tokenResult->plainTextToken,
+            'expires_at' => $accessToken->expires_at,
+
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
@@ -47,15 +62,15 @@ class AuthController extends Controller
                 'role' => $user->role,
                 'education_level' => $user->education_level,
                 'is_approved' => $user->is_approved,
-            ],
-            'token' => $token
+            ]
         ], 201);
     }
 
-    // POST /api/login
+    /**
+     * Login
+     */
     public function login(Request $request)
     {
-         
         $request->validate([
             'email' => 'required|email',
             'password' => 'required',
@@ -69,9 +84,26 @@ class AuthController extends Controller
             ]);
         }
 
-        $token = $user->createToken('auth_token')->plainTextToken;
+        // Delete previous auth tokens
+        $user->tokens()->where('name', 'auth_token')->delete();
+
+        $days = 7;
+
+        $tokenResult = $user->createToken(
+            'auth_token',
+            ['*'],
+            now()->addDays($days)
+        );
+
+        $accessToken = $user->tokens()->latest('id')->first();
 
         return response()->json([
+            'success' => true,
+            'message' => 'Login successful',
+
+            'token' => $tokenResult->plainTextToken,
+            'expires_at' => $accessToken->expires_at,
+
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
@@ -79,14 +111,66 @@ class AuthController extends Controller
                 'role' => $user->role,
                 'education_level' => $user->education_level,
                 'is_approved' => $user->is_approved,
-            ],
-            'token' => $token,
-            'success' => true,
-            'message' => 'Login successfully'
+            ]
         ]);
-            
     }
-    // Forgot Password - sends 6-digit code to email
+
+    /**
+     * Logout
+     */
+    public function logout(Request $request)
+    {
+        if ($request->user()) {
+            $request->user()->currentAccessToken()->delete();
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Logged out successfully'
+        ]);
+    }
+
+    /**
+     * Refresh Token
+     */
+    public function refresh(Request $request)
+    {
+        $user = $request->user();
+
+        $currentToken = $user?->currentAccessToken();
+
+        if (!$currentToken) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized'
+            ], 401);
+        }
+
+        // Delete old token
+        $currentToken->delete();
+
+        $days = 7;
+
+        $tokenResult = $user->createToken(
+            'auth_token',
+            ['*'],
+            now()->addDays($days)
+        );
+
+        $accessToken = $user->tokens()->latest('id')->first();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Token refreshed',
+
+            'token' => $tokenResult->plainTextToken,
+            'expires_at' => $accessToken->expires_at,
+        ]);
+    }
+
+    /**
+     * Forgot Password
+     */
     public function forgotPassword(Request $request)
     {
         $request->validate([
@@ -100,44 +184,47 @@ class AuthController extends Controller
                 'message' => 'Email not found'
             ], 404);
         }
-        
-        // Generate 6-digit code
+
         $code = random_int(100000, 999999);
-        
-        // Delete any existing codes for this email
-        DB::table('password_reset_codes')->where('email', $request->email)->delete();
-        
-        // Store code with 1 hour expiration
+
+        DB::table('password_reset_codes')
+            ->where('email', $request->email)
+            ->delete();
+
         DB::table('password_reset_codes')->insert([
             'email' => $request->email,
             'code' => $code,
             'expires_at' => Carbon::now()->addMinutes(10),
-            'created_at' => Carbon::now(),
-            'updated_at' => Carbon::now(),
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
-        
-        // Send code via Resend
+
         try {
             $notification = new ResetPasswordCode($code);
             $notification->send($user);
         } catch (\Exception $e) {
-            $errorMessage = $e->getMessage();
-            \Log::error('Failed to send password reset code: ' . $errorMessage);
+
+            \Log::error($e->getMessage());
+
             return response()->json([
-                'message' => 'Failed to send code. Error: ' . $errorMessage
+                'message' => 'Unable to send reset code.'
             ], 500);
         }
 
-        return response()->json(['message' => '6-digit code sent to your email']);
+        return response()->json([
+            'message' => '6-digit code sent successfully.'
+        ]);
     }
 
-    // Reset Password with 6-digit code
+    /**
+     * Reset Password
+     */
     public function resetPassword(Request $request)
     {
         $request->validate([
-            'code' => 'required|digits:6',
             'email' => 'required|email',
-            'password' => 'required|string|min:8|confirmed',
+            'code' => 'required|digits:6',
+            'password' => 'required|min:8|confirmed',
         ]);
 
         $user = User::where('email', $request->email)->first();
@@ -148,12 +235,11 @@ class AuthController extends Controller
             ], 404);
         }
 
-        // Verify code exists and hasn't expired
         $resetCode = DB::table('password_reset_codes')
             ->where('email', $request->email)
             ->where('code', $request->code)
             ->first();
-        
+
         if (!$resetCode) {
             return response()->json([
                 'message' => 'Invalid code'
@@ -165,56 +251,47 @@ class AuthController extends Controller
                 'message' => 'Code has expired'
             ], 400);
         }
-        
-        // Update password
-        $user->update(['password' => Hash::make($request->password)]);
-        
-        // Delete used code
+
+        $user->update([
+            'password' => Hash::make($request->password)
+        ]);
+
         DB::table('password_reset_codes')
             ->where('email', $request->email)
-            ->where('code', $request->code)
             ->delete();
 
         return response()->json([
+            'success' => true,
             'message' => 'Password reset successful'
-        ], 200);
+        ]);
     }
 
-    // Change Password - requires old password verification
+    /**
+     * Change Password
+     */
     public function changePassword(ChangePasswordRequest $request)
     {
         $user = $request->user();
 
-        // Verify current password matches
         if (!Hash::check($request->current_password, $user->password)) {
             return response()->json([
                 'message' => 'Current password is incorrect'
             ], 422);
         }
 
-        // Prevent using same password as new password
         if (Hash::check($request->new_password, $user->password)) {
             return response()->json([
-                'message' => 'New password must be different from current password'
+                'message' => 'New password must be different.'
             ], 422);
         }
 
-        // Update password
         $user->update([
-            'password' => Hash::make($request->new_password)
+            'password' => Hash::make($request->new_password),
         ]);
 
         return response()->json([
+            'success' => true,
             'message' => 'Password changed successfully'
-        ], 200);
-    }
-
-    // Logout
-    
-    // POST /api/logout
-    public function logout(Request $request)
-    {
-        $request->user()->currentAccessToken()->delete();
-        return response()->json(['message' => 'Logged out successfully']);
+        ]);
     }
 }
