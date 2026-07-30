@@ -8,8 +8,10 @@ use App\Models\User;
 use App\Notifications\ResetPasswordCode;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -17,103 +19,73 @@ class AuthController extends Controller
     /**
      * Register
      */
-    public function register(Request $request)
-    {
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'required|email|max:255|unique:users',
-            'password' => 'required|string|min:8|confirmed',
-            'role' => 'required|in:student,tutor',
-            'education_level' => 'required|in:basic,secondary',
-        ]);
+   public function register(Request $request)
+{
+    $request->validate([
+        'name' => 'required|string|max:255',
+        'email' => 'required|email|max:255|unique:users',
+        'password' => 'required|string|min:8|confirmed',
+        'role' => 'required|in:student,tutor',
+        'education_level' => 'required|in:basic,secondary',
+    ]);
 
-        $user = User::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => Hash::make($request->password),
-            'role' => $request->role,
-            'education_level' => $request->education_level,
-            'is_approved' => $request->role === 'tutor' ? false : true,
-        ]);
+    $user = User::create([
+        'name' => $request->name,
+        'email' => $request->email,
+        'password' => Hash::make($request->password),
+        'role' => $request->role,
+        'education_level' => $request->education_level,
+        'is_approved' => $request->role === 'tutor' ? false : true,
+    ]);
 
-        $days = 7;
+    $token = $user->createToken('auth_token')->plainTextToken;
 
-        $tokenResult = $user->createToken(
-            'auth_token',
-            ['*'],
-            now()->addDays($days)
-        );
+    return response()->json([
+        'success' => true,
+        'message' => 'Registration successful',
+        'token' => $token,
+        'user' => [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => $user->role,
+            'education_level' => $user->education_level,
+            'is_approved' => $user->is_approved,
+        ],
+    ]);
+}
 
-        $accessToken = $user->tokens()->latest('id')->first();
+    
+public function login(Request $request)
+{
+    $request->validate([
+        'email' => 'required|email',
+        'password' => 'required',
+    ]);
 
-        return response()->json([
-            'success' => true,
-            'message' => $user->role === 'tutor'
-                ? 'Registration successful. Wait for admin approval.'
-                : 'Registration successful',
-
-            'token' => $tokenResult->plainTextToken,
-            'expires_at' => $accessToken->expires_at,
-
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-                'role' => $user->role,
-                'education_level' => $user->education_level,
-                'is_approved' => $user->is_approved,
-            ]
-        ], 201);
-    }
-
-    /**
-     * Login
-     */
-    public function login(Request $request)
-    {
-        $request->validate([
-            'email' => 'required|email',
-            'password' => 'required',
-        ]);
-
-        $user = User::where('email', $request->email)->first();
-
-        if (!$user || !Hash::check($request->password, $user->password)) {
-            throw ValidationException::withMessages([
-                'email' => ['The provided credentials are incorrect.'],
-            ]);
-        }
-
-        // Delete previous auth tokens
-        $user->tokens()->where('name', 'auth_token')->delete();
-
-        $days = 7;
-
-        $tokenResult = $user->createToken(
-            'auth_token',
-            ['*'],
-            now()->addDays($days)
-        );
-
-        $accessToken = $user->tokens()->latest('id')->first();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Login successful',
-
-            'token' => $tokenResult->plainTextToken,
-            'expires_at' => $accessToken->expires_at,
-
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-                'role' => $user->role,
-                'education_level' => $user->education_level,
-                'is_approved' => $user->is_approved,
-            ]
+    if (!Auth::attempt($request->only('email', 'password'))) {
+        throw ValidationException::withMessages([
+            'email' => ['The provided credentials are incorrect.'],
         ]);
     }
+
+    $user = Auth::user();
+    $token = $user->createToken('auth_token')->plainTextToken;
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Login successful',
+        'token' => $token,
+        'user' => [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => $user->role,
+            'education_level' => $user->education_level,
+            'is_approved' => $user->is_approved,
+        ],
+    ]);
+}
 
     /**
      * Logout
@@ -121,101 +93,60 @@ class AuthController extends Controller
     public function logout(Request $request)
     {
         if ($request->user()) {
-            $request->user()->currentAccessToken()->delete();
+            $request->user()->tokens()?->delete();
         }
 
         return response()->json([
             'success' => true,
-            'message' => 'Logged out successfully'
+            'message' => 'Logged out successfully',
         ]);
     }
 
     /**
      * Refresh Token
      */
-    public function refresh(Request $request)
-    {
-        $user = $request->user();
+  public function refresh(Request $request)
+{
+    $user = $request->user();
 
-        $currentToken = $user?->currentAccessToken();
-
-        if (!$currentToken) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized'
-            ], 401);
-        }
-
-        // Delete old token
-        $currentToken->delete();
-
-        $days = 7;
-
-        $tokenResult = $user->createToken(
-            'auth_token',
-            ['*'],
-            now()->addDays($days)
-        );
-
-        $accessToken = $user->tokens()->latest('id')->first();
-
+    if (!$user) {
         return response()->json([
-            'success' => true,
-            'message' => 'Token refreshed',
-
-            'token' => $tokenResult->plainTextToken,
-            'expires_at' => $accessToken->expires_at,
-        ]);
+            'success' => false,
+            'message' => 'Unauthorized'
+        ], 401);
     }
 
-    /**
-     * Forgot Password
-     */
-    public function forgotPassword(Request $request)
-    {
-        $request->validate([
-            'email' => 'required|email',
-        ]);
+    $currentToken = $user->currentAccessToken();
 
-        $user = User::where('email', $request->email)->first();
-
-        if (!$user) {
-            return response()->json([
-                'message' => 'Email not found'
-            ], 404);
-        }
-
-        $code = random_int(100000, 999999);
-
-        DB::table('password_reset_codes')
-            ->where('email', $request->email)
-            ->delete();
-
-        DB::table('password_reset_codes')->insert([
-            'email' => $request->email,
-            'code' => $code,
-            'expires_at' => Carbon::now()->addMinutes(10),
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
-
-        try {
-            $notification = new ResetPasswordCode($code);
-            $notification->send($user);
-        } catch (\Exception $e) {
-
-            \Log::error($e->getMessage());
-
-            return response()->json([
-                'message' => 'Unable to send reset code.'
-            ], 500);
-        }
-
+    if (!$currentToken) {
         return response()->json([
-            'message' => '6-digit code sent successfully.'
-        ]);
+            'success' => false,
+            'message' => 'Unauthorized'
+        ], 401);
     }
 
+    $currentToken->delete();
+
+    $token = $user->createToken('auth_token')->plainTextToken;
+
+   return response()
+    ->json([
+        'success' => true,
+        'message' => 'Token refreshed',
+        // 'expires_at' => now()->addDays(7)->toISOString(),
+    ])
+    ->cookie(
+        'auth_token',
+        $token,
+        60 * 24 * 7,
+        '/',
+        null,
+        app()->environment('production'),
+        true,
+        false,
+        'Lax'
+    );
+}
     /**
      * Reset Password
      */
@@ -265,6 +196,50 @@ class AuthController extends Controller
             'message' => 'Password reset successful'
         ]);
     }
+
+    public function forgotPassword(Request $request)
+{
+    $request->validate([
+        'email' => 'required|email',
+    ]);
+
+    $user = User::where('email', $request->email)->first();
+
+    if (!$user) {
+        return response()->json([
+            'message' => 'Email not found'
+        ], 404);
+    }
+
+    $code = random_int(100000, 999999);
+
+    DB::table('password_reset_codes')
+        ->where('email', $request->email)
+        ->delete();
+
+    DB::table('password_reset_codes')->insert([
+        'email' => $request->email,
+        'code' => $code,
+        'expires_at' => Carbon::now()->addMinutes(10),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    try {
+        (new ResetPasswordCode($code))->send($user);
+    } catch (\Exception $e) {
+        Log::error($e->getMessage());
+
+        return response()->json([
+            'message' => 'Unable to send reset code.'
+        ], 500);
+    }
+
+    return response()->json([
+        'success' => true,
+        'message' => '6-digit code sent successfully.'
+    ]);
+}
 
     /**
      * Change Password

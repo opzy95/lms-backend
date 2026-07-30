@@ -20,18 +20,34 @@ use App\Http\Controllers\Api\LiveClassController;
 |--------------------------------------------------------------------------
 */
 
+
+
 Route::get('/test', function () {
     return response()->json(['message' => 'API is working!']);
 });
 
-Route::post('/register', [AuthController::class, 'register']);
-Route::post('/login', [AuthController::class, 'login']);
+Route::middleware('throttle:5,60')->group(function () {
+    Route::post('/register', [AuthController::class, 'register']);
+    Route::post('/login', [AuthController::class, 'login']);
+    Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
+    Route::post('/reset-password', [AuthController::class, 'resetPassword']);
+});
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/logout', [AuthController::class, 'logout']);
+});
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/refresh', [AuthController::class, 'refresh']);
+    Route::post('/change-password', [AuthController::class, 'changePassword']);
+
+    Route::get('/user', function (Request $request) {
+        return response()->json($request->user());
+    });
+});
 
 Route::get('/courses', [CourseController::class, 'index']);
 Route::get('/courses/{id}', [CourseController::class, 'showPublic']);
-
-Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
-Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 
 /*
 |--------------------------------------------------------------------------
@@ -40,14 +56,6 @@ Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 */
 
 Route::middleware('auth:sanctum')->group(function () {
-
-    Route::post('/logout', [AuthController::class, 'logout']);
-    Route::post('/refresh', [AuthController::class, 'refresh']);
-    Route::post('/change-password', [AuthController::class, 'changePassword']);
-
-    Route::get('/user', function (Request $request) {
-        return $request->user();
-    });
 
     // Course recommendations for authenticated users
     Route::get('/courses/recommendations/similar', [CourseController::class, 'getRecommendations']);
