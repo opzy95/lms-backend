@@ -38,12 +38,12 @@ class AuthController extends Controller
         'is_approved' => $request->role === 'tutor' ? false : true,
     ]);
 
-    $token = $user->createToken('auth_token')->plainTextToken;
+    Auth::login($user);
+    $request->session()->regenerate();
 
     return response()->json([
         'success' => true,
         'message' => 'Registration successful',
-        'token' => $token,
         'user' => [
             'id' => $user->id,
             'name' => $user->name,
@@ -70,12 +70,11 @@ public function login(Request $request)
     }
 
     $user = Auth::user();
-    $token = $user->createToken('auth_token')->plainTextToken;
+    $request->session()->regenerate();
 
     return response()->json([
         'success' => true,
         'message' => 'Login successful',
-        'token' => $token,
         'user' => [
             'id' => $user->id,
             'name' => $user->name,
@@ -92,8 +91,16 @@ public function login(Request $request)
      */
     public function logout(Request $request)
     {
-        if ($request->user()) {
-            $request->user()->tokens()?->delete();
+        $currentToken = $request->user()?->currentAccessToken();
+
+        if ($currentToken && !$currentToken instanceof \Laravel\Sanctum\TransientToken) {
+            $currentToken->delete();
+        }
+
+        if ($request->hasSession()) {
+            Auth::guard('web')->logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
         }
 
         return response()->json([
@@ -125,27 +132,14 @@ public function login(Request $request)
         ], 401);
     }
 
-    $currentToken->delete();
+    if ($request->hasSession()) {
+        $request->session()->regenerate();
+    }
 
-    $token = $user->createToken('auth_token')->plainTextToken;
-
-   return response()
-    ->json([
+    return response()->json([
         'success' => true,
-        'message' => 'Token refreshed',
-        // 'expires_at' => now()->addDays(7)->toISOString(),
-    ])
-    ->cookie(
-        'auth_token',
-        $token,
-        60 * 24 * 7,
-        '/',
-        null,
-        app()->environment('production'),
-        true,
-        false,
-        'Lax'
-    );
+        'message' => 'Session refreshed',
+    ]);
 }
     /**
      * Reset Password

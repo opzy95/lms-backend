@@ -19,14 +19,6 @@ return Application::configure(basePath: dirname(__DIR__))
         // Enable Sanctum stateful API
         $middleware->statefulApi();
 
-        // Exempt API endpoints from CSRF validation so SPA auth requests work reliably
-        $middleware->validateCsrfTokens(except: ['api/*']);
-
-        // Read token from HttpOnly cookie
-        $middleware->append(
-            \App\Http\Middleware\AuthTokenFromCookie::class
-        );
-
         // Route middleware aliases
         $middleware->alias([
             'role' => \App\Http\Middleware\CheckRole::class,

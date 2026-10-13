@@ -31,6 +31,19 @@ test('users can not authenticate with invalid password', function () {
     $this->assertGuest();
 });
 
+test('api login authenticates a browser session without returning a bearer token', function () {
+    $user = User::factory()->create();
+
+    $response = $this->withHeader('Origin', 'http://localhost:5173')->postJson('/api/login', [
+        'email' => $user->email,
+        'password' => 'password',
+    ]);
+
+    $response->assertOk()
+        ->assertJsonMissingPath('token')
+        ->assertCookie(config('session.cookie'));
+});
+
 test('users can logout', function () {
     $user = User::factory()->create();
 
@@ -38,4 +51,20 @@ test('users can logout', function () {
 
     $this->assertGuest();
     $response->assertRedirect('/');
+});
+
+test('api logout revokes only the current access token', function () {
+    $user = User::factory()->create();
+    $currentToken = $user->createToken('current');
+    $otherToken = $user->createToken('other');
+
+    $response = $this->withToken($currentToken->plainTextToken)->postJson('/api/logout');
+
+    $response->assertOk();
+    $this->assertDatabaseMissing('personal_access_tokens', [
+        'id' => $currentToken->accessToken->id,
+    ]);
+    $this->assertDatabaseHas('personal_access_tokens', [
+        'id' => $otherToken->accessToken->id,
+    ]);
 });
